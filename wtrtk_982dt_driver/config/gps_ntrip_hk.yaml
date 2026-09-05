@@ -1,0 +1,29 @@
+gps_ntrip_node:
+  ros__parameters:
+    serial_port: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+    baud_rate: 115200
+    serial_exclusive: true
+    serial_reconnect_delay_sec: 3.0
+    # 接收机输出周期（秒）：1=1 Hz，0.5=2 Hz，0.2=5 Hz，0.1=10 Hz。
+    gga_output_interval_sec: 1.0
+    hpr_output_interval_sec: 1.0
+    receiver_request_retry_sec: 3.0
+    # 超过该时间未收到 HPR 时，再发布一帧 data_valid=false。
+    attitude_timeout_sec: 2.5
+    validate_nmea_checksum: true
+    frame_id: gps
+    attitude_frame_id: gps
+    # 天线基线航向到车辆前向的安装偏角：车辆航向 = 原始航向 + 此值。
+    heading_offset_deg: 0.0
+
+    ntrip_host: www.geodetic.gov.hk
+    ntrip_port: 2101
+    ntrip_mountpoint: VRS32G
+    # 推荐通过 NTRIP_USERNAME/NTRIP_PASSWORD 环境变量传入凭据。
+    ntrip_username: "rowanrtk982"
+    ntrip_password: "a9NZcf"
+    ntrip_version: "1.0"
+    ntrip_user_agent: NTRIP wtrtk_982dt_driver/1.1
+    ntrip_connect_timeout_sec: 5.0
+    ntrip_reconnect_delay_sec: 5.0
+    gga_send_interval_sec: 1.0

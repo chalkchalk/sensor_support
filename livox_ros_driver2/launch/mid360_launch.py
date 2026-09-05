@@ -6,6 +6,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -15,6 +16,7 @@ def generate_launch_description():
         package_share, "config", "display_point_cloud_ROS2.rviz"
     )
     rviz_enabled = LaunchConfiguration("rviz")
+    pointcloud_format = LaunchConfiguration("format")
 
     return LaunchDescription(
         [
@@ -23,6 +25,14 @@ def generate_launch_description():
                 default_value="false",
                 description="Start RViz2 with the Livox point cloud configuration.",
             ),
+            DeclareLaunchArgument(
+                "format",
+                default_value="0",
+                description=(
+                    "Point cloud format: 0=PointCloud2, "
+                    "1=Livox CustomMsg, 2=PCL PointXYZI."
+                ),
+            ),
             Node(
                 package="livox_ros_driver2",
                 executable="livox_ros_driver2_node",
@@ -30,7 +40,9 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "xfer_format": 0,
+                        "xfer_format": ParameterValue(
+                            pointcloud_format, value_type=int
+                        ),
                         "multi_topic": 0,
                         "data_src": 0,
                         "publish_freq": 10.0,

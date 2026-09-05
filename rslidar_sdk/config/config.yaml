@@ -41,7 +41,9 @@
 #       ros_send_packet_topic: /rslidar_packets          #Topic used to send lidar packets through ROS
 #       ros_send_imu_data_topic: /rslidar_imu_data         #Topic used to send imu data through ROS
 #       ros_send_point_cloud_topic: /rslidar_points      #Topic used to send point cloud through ROS
+#       ros_point_cloud_qos: default                     #default: reliable; sensor_data: best effort/depth 1
 #       ros_queue_length: 100                            #Topic QoS history depth
+#       ros_stats_interval: 5.0                          #Publish statistics interval in seconds; 0 disables it
 
 common:
   msg_source: 1
@@ -80,7 +82,9 @@ lidar:
       ros_send_packet_topic: /rslidar_packets_front
       ros_send_imu_data_topic: /rslidar_imu_data_front
       ros_send_point_cloud_topic: /rslidar_points_front
+      ros_point_cloud_qos: default
       ros_queue_length: 100
+      ros_stats_interval: 5.0
   - driver:
       lidar_type: RSAIRY
       msop_port: 6692
@@ -113,4 +117,6 @@ lidar:
       ros_send_packet_topic: /rslidar_packets_rear
       ros_send_imu_data_topic: /rslidar_imu_data_rear
       ros_send_point_cloud_topic: /rslidar_points_rear
+      ros_point_cloud_qos: default
       ros_queue_length: 100
+      ros_stats_interval: 5.0

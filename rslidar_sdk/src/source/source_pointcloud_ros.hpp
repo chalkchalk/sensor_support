@@ -32,6 +32,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
+#include <chrono>
+
 #include "source/source.hpp"
 
 #ifdef ROS_FOUND
@@ -444,7 +446,12 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
 #endif
   std::string frame_id_;
+  std::string topic_;
   bool send_by_rows_;
+  double stats_interval_{5.0};
+  std::size_t stats_frames_{0};
+  std::size_t stats_bytes_{0};
+  std::chrono::steady_clock::time_point stats_start_;
 };
 
 inline void DestinationPointCloudRos::init(const YAML::Node& config)
@@ -463,9 +470,19 @@ inline void DestinationPointCloudRos::init(const YAML::Node& config)
   std::string ros_send_topic;
   yamlRead<std::string>(config["ros"], 
       "ros_send_point_cloud_topic", ros_send_topic, "rslidar_points");
+  topic_ = ros_send_topic;
 
   size_t ros_queue_length;
   yamlRead<size_t>(config["ros"], "ros_queue_length", ros_queue_length, 100);
+
+  std::string ros_point_cloud_qos;
+  yamlRead<std::string>(config["ros"],
+      "ros_point_cloud_qos", ros_point_cloud_qos, "default");
+  yamlRead<double>(config["ros"], "ros_stats_interval", stats_interval_, 5.0);
+  if (stats_interval_ < 0.0)
+  {
+    throw std::invalid_argument("ros_stats_interval must be greater than or equal to zero");
+  }
 
   static int node_index = 0;
   std::stringstream node_name;
@@ -473,7 +490,25 @@ inline void DestinationPointCloudRos::init(const YAML::Node& config)
 
   node_ptr_.reset(new rclcpp::Node(node_name.str()));
 
-  pub_ = node_ptr_->create_publisher<sensor_msgs::msg::PointCloud2>(ros_send_topic, ros_queue_length);
+  if (ros_point_cloud_qos == "sensor_data")
+  {
+    auto qos = rclcpp::SensorDataQoS();
+    qos.keep_last(1);
+    qos.best_effort();
+    qos.durability_volatile();
+    pub_ = node_ptr_->create_publisher<sensor_msgs::msg::PointCloud2>(ros_send_topic, qos);
+  }
+  else if (ros_point_cloud_qos == "default")
+  {
+    pub_ = node_ptr_->create_publisher<sensor_msgs::msg::PointCloud2>(
+      ros_send_topic, rclcpp::QoS(rclcpp::KeepLast(ros_queue_length)));
+  }
+  else
+  {
+    throw std::invalid_argument(
+      "ros_point_cloud_qos must be 'default' or 'sensor_data'");
+  }
+  stats_start_ = std::chrono::steady_clock::now();
 
 #ifdef ENABLE_IMU_DATA_PARSE
   std::string ros_send_imu_data_topic;
@@ -486,7 +521,25 @@ inline void DestinationPointCloudRos::init(const YAML::Node& config)
 
 inline void DestinationPointCloudRos::sendPointCloud(const LidarPointCloudMsg& msg)
 {
-  pub_->publish(toRosMsg(msg, frame_id_, send_by_rows_));
+  auto ros_msg = toRosMsg(msg, frame_id_, send_by_rows_);
+  const std::size_t bytes = ros_msg.data.size();
+  pub_->publish(std::move(ros_msg));
+  ++stats_frames_;
+  stats_bytes_ += bytes;
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double>(now - stats_start_).count();
+  if (stats_interval_ > 0.0 && elapsed >= stats_interval_)
+  {
+    RCLCPP_INFO(
+      node_ptr_->get_logger(),
+      "%s: publish rate %.2f Hz, average point data %.2f MiB (%zu frames)",
+      topic_.c_str(), static_cast<double>(stats_frames_) / elapsed,
+      static_cast<double>(stats_bytes_) / static_cast<double>(stats_frames_) / (1024.0 * 1024.0),
+      stats_frames_);
+    stats_frames_ = 0;
+    stats_bytes_ = 0;
+    stats_start_ = now;
+  }
 }
 #ifdef ENABLE_IMU_DATA_PARSE
 inline void DestinationPointCloudRos::sendImuData(const std::shared_ptr<ImuData> & data)
@@ -498,4 +551,3 @@ inline void DestinationPointCloudRos::sendImuData(const std::shared_ptr<ImuData>
 }  // namespace robosense
 
 #endif
-
