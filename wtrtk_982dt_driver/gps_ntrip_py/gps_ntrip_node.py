@@ -10,7 +10,7 @@ import time
 from typing import Any, Optional, Tuple
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from wtrtk_982dt_driver.msg import GnssAttitude
+from wtrtk_982dt_driver.msg import GnssAttitude, GnssLocalPose
 from gps_ntrip_py.hpr import (
     corrected_heading,
     data_is_valid,
@@ -19,6 +19,10 @@ from gps_ntrip_py.hpr import (
     parse_hpr,
 )
 from gps_ntrip_py.nmea import GgaData, NmeaLineBuffer, parse_gga
+from gps_ntrip_py.local_coordinates import (
+    LocalEnuProjector,
+    nmea_utc_difference_seconds,
+)
 from gps_ntrip_py.ntrip import (
     build_request,
     NtripResponseError,
@@ -54,6 +58,11 @@ class GpsNtripNode(Node):
             'gnss/attitude',
             10,
         )
+        self._local_pose_publisher = self.create_publisher(
+            GnssLocalPose,
+            'gnss/local_pose',
+            10,
+        )
         connection_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -82,6 +91,8 @@ class GpsNtripNode(Node):
         self._latest_hpr_lock = threading.Lock()
         self._latest_hpr: Optional[Tuple[HprData, float]] = None
         self._attitude_stale_published = False
+        self._local_pose_valid = False
+        self._pending_local_gga: list[Tuple[GgaData, Any, bool, float]] = []
         self._rtcm_queue: queue.Queue[bytes] = queue.Queue(maxsize=256)
         self._ros_events: queue.Queue[_RosEvent] = queue.Queue(maxsize=1024)
         self._socket_lock = threading.Lock()
@@ -138,6 +149,11 @@ class GpsNtripNode(Node):
         self.declare_parameter('frame_id', 'gps')
         self.declare_parameter('attitude_frame_id', 'gps')
         self.declare_parameter('heading_offset_deg', 0.0)
+        self.declare_parameter('local_pose_enabled', False)
+        self.declare_parameter('origin_latitude_deg', 0.0)
+        self.declare_parameter('origin_longitude_deg', 0.0)
+        self.declare_parameter('local_frame_id', 'map')
+        self.declare_parameter('local_pose_sync_tolerance_sec', 0.2)
         self.declare_parameter('ntrip_enabled', True)
         self.declare_parameter('ntrip_profile', 'ml')
         self.declare_parameter('ntrip_host', '120.253.239.161')
@@ -178,6 +194,14 @@ class GpsNtripNode(Node):
         self._frame_id = str(value('frame_id'))
         self._attitude_frame_id = str(value('attitude_frame_id'))
         self._heading_offset_deg = float(value('heading_offset_deg'))
+        self._local_pose_enabled = bool(value('local_pose_enabled'))
+        self._origin_latitude_deg = float(value('origin_latitude_deg'))
+        self._origin_longitude_deg = float(value('origin_longitude_deg'))
+        self._local_frame_id = str(value('local_frame_id'))
+        self._local_pose_sync_tolerance = float(
+            value('local_pose_sync_tolerance_sec')
+        )
+        self._local_projector: Optional[LocalEnuProjector] = None
         self._ntrip_enabled = bool(value('ntrip_enabled'))
         self._ntrip_profile = str(value('ntrip_profile')).strip().lower()
         self._ntrip_host = str(value('ntrip_host'))
@@ -209,6 +233,15 @@ class GpsNtripNode(Node):
             raise ValueError('frame_id and attitude_frame_id must not be empty')
         if not math.isfinite(self._heading_offset_deg):
             raise ValueError('heading_offset_deg must be finite')
+        if self._local_pose_sync_tolerance <= 0.0:
+            raise ValueError('local_pose_sync_tolerance_sec must be positive')
+        if self._local_pose_enabled:
+            if not self._local_frame_id:
+                raise ValueError('local_frame_id must not be empty')
+            self._local_projector = LocalEnuProjector(
+                self._origin_latitude_deg,
+                self._origin_longitude_deg,
+            )
         for interval, name in (
             (self._gga_output_interval, 'gga_output_interval_sec'),
             (self._hpr_output_interval, 'hpr_output_interval_sec'),
@@ -248,6 +281,7 @@ class GpsNtripNode(Node):
                 self._serial_ready.clear()
                 self._emit('device_connection', False)
                 self._emit('fix_valid', False)
+                self._emit('local_pose_invalid', None)
                 self._clear_latest_gga()
                 self._clear_rtcm_queue()
                 if port is not None and port.is_open:
@@ -475,23 +509,29 @@ class GpsNtripNode(Node):
                 self._publish_gga(event.payload)
             elif event.kind == 'hpr':
                 self._publish_hpr(event.payload, fresh=True)
+                self._match_pending_local_poses(event.payload, fresh=True)
             elif event.kind == 'connection':
                 self._publish_connection_state(bool(event.payload))
             elif event.kind == 'device_connection':
                 self._publish_bool(self._device_publisher, bool(event.payload))
             elif event.kind == 'fix_valid':
                 self._publish_bool(self._fix_valid_publisher, bool(event.payload))
+            elif event.kind == 'local_pose_invalid':
+                self._pending_local_gga.clear()
+                self._publish_invalid_local_pose()
             elif event.kind == 'info':
                 self.get_logger().info(str(event.payload))
             elif event.kind == 'warning':
                 self.get_logger().warning(str(event.payload))
             elif event.kind == 'error':
                 self.get_logger().error(str(event.payload))
+        self._expire_pending_local_poses()
         self._check_attitude_timeout()
 
     def _publish_gga(self, gga: GgaData) -> None:
+        stamp = self.get_clock().now().to_msg()
         fix = NavSatFix()
-        fix.header.stamp = self.get_clock().now().to_msg()
+        fix.header.stamp = stamp
         fix.header.frame_id = self._frame_id
         fix.status.service = NavSatStatus.SERVICE_GPS
         has_fix = (
@@ -506,6 +546,110 @@ class GpsNtripNode(Node):
         fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_UNKNOWN
         self._fix_publisher.publish(fix)
         self._publish_bool(self._fix_valid_publisher, has_fix)
+        if self._local_pose_enabled:
+            self._pending_local_gga.append(
+                (gga, stamp, has_fix, time.monotonic())
+            )
+            latest_hpr = self._get_latest_hpr()
+            if latest_hpr is not None:
+                hpr, received_at = latest_hpr
+                self._match_pending_local_poses(
+                    hpr,
+                    fresh=(
+                        self._serial_ready.is_set()
+                        and time.monotonic() - received_at <= self._attitude_timeout
+                    ),
+                )
+
+    def _publish_local_pose(
+        self,
+        gga: GgaData,
+        stamp: Any,
+        has_fix: bool,
+        hpr: Optional[HprData],
+    ) -> None:
+        message = GnssLocalPose()
+        message.header.stamp = stamp
+        message.header.frame_id = self._local_frame_id
+        message.x = math.nan
+        message.y = math.nan
+        message.heading_deg = math.nan
+
+        if has_fix:
+            assert self._local_projector is not None
+            try:
+                message.x, message.y = self._local_projector.project(
+                    gga.latitude,
+                    gga.longitude,
+                )
+            except ValueError:
+                has_fix = False
+
+        heading_valid = hpr is not None and data_is_valid(hpr)
+        if heading_valid:
+            message.heading_deg = corrected_heading(
+                hpr.heading_deg,
+                self._heading_offset_deg,
+            )
+
+        message.data_valid = has_fix and heading_valid
+        self._local_pose_valid = message.data_valid
+        self._local_pose_publisher.publish(message)
+
+    def _match_pending_local_poses(self, hpr: HprData, fresh: bool) -> None:
+        if not self._local_pose_enabled or not fresh:
+            return
+        matched_indices = []
+        for index, pending in enumerate(self._pending_local_gga):
+            gga, stamp, has_fix, _ = pending
+            try:
+                difference = nmea_utc_difference_seconds(
+                    gga.utc_time,
+                    hpr.utc_time,
+                )
+            except ValueError:
+                difference = math.inf
+            if difference <= self._local_pose_sync_tolerance:
+                self._publish_local_pose(gga, stamp, has_fix, hpr)
+                matched_indices.append(index)
+        if not matched_indices:
+            return
+
+        # A newly matched pose supersedes any older unmatched position. This
+        # prevents a delayed invalid sample from being published after newer,
+        # valid data when GGA and HPR sentences arrive in different orders.
+        last_matched_index = matched_indices[-1]
+        self._pending_local_gga = [
+            item
+            for index, item in enumerate(self._pending_local_gga)
+            if index > last_matched_index
+        ]
+
+    def _expire_pending_local_poses(self) -> None:
+        if not self._local_pose_enabled or not self._pending_local_gga:
+            return
+        now = time.monotonic()
+        pending = []
+        for item in self._pending_local_gga:
+            gga, stamp, has_fix, received_at = item
+            if now - received_at >= self._local_pose_sync_tolerance:
+                self._publish_local_pose(gga, stamp, has_fix, None)
+            else:
+                pending.append(item)
+        self._pending_local_gga = pending
+
+    def _publish_invalid_local_pose(self) -> None:
+        if not self._local_pose_enabled or not self._local_pose_valid:
+            return
+        message = GnssLocalPose()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = self._local_frame_id
+        message.x = math.nan
+        message.y = math.nan
+        message.heading_deg = math.nan
+        message.data_valid = False
+        self._local_pose_valid = False
+        self._local_pose_publisher.publish(message)
 
     def _publish_diagnostics(self) -> None:
         now = time.monotonic()
@@ -544,6 +688,14 @@ class GpsNtripNode(Node):
             KeyValue(key='device_connected', value=str(device_connected).lower()),
             KeyValue(key='fix_valid', value=str(fix_valid).lower()),
             KeyValue(key='attitude_valid', value=str(attitude_valid).lower()),
+            KeyValue(
+                key='local_pose_enabled',
+                value=str(self._local_pose_enabled).lower(),
+            ),
+            KeyValue(
+                key='local_pose_valid',
+                value=str(self._local_pose_valid).lower(),
+            ),
             KeyValue(key='ntrip_enabled', value=str(self._ntrip_enabled).lower()),
             KeyValue(key='ntrip_profile', value=self._ntrip_profile),
             KeyValue(key='ntrip_connected', value=str(self._connection_state).lower()),
@@ -586,6 +738,7 @@ class GpsNtripNode(Node):
         if time.monotonic() - received_at < self._attitude_timeout:
             return
         self._publish_hpr(hpr, fresh=False)
+        self._publish_invalid_local_pose()
         self._attitude_stale_published = True
         self.get_logger().warning(
             'HPR 数据已超时，/gnss/attitude 的 data_valid 已置为 false'

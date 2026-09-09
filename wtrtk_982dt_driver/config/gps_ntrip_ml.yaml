@@ -14,8 +14,17 @@ gps_ntrip_node:
     frame_id: gps
     attitude_frame_id: gps
     # 天线基线航向到车辆前向的安装偏角：车辆航向 = 原始航向 + 此值。
-    heading_offset_deg: 0.0
+    heading_offset_deg: -90.0
 
+    # 中国大陆场地的局部二维位姿原点。填入真实值后再启用。
+    local_pose_enabled: true
+    origin_latitude_deg: 31.819693675833335
+    origin_longitude_deg: 117.12621049316667
+    local_frame_id: map
+    local_pose_sync_tolerance_sec: 0.2
+
+    ntrip_enabled: true
+    ntrip_profile: ml
     ntrip_host: 120.253.226.97
     ntrip_port: 8001
     ntrip_mountpoint: RTCM33_GRCEJ

@@ -16,6 +16,14 @@ gps_ntrip_node:
     # 天线基线航向到车辆前向的安装偏角：车辆航向 = 原始航向 + 此值。
     heading_offset_deg: 0.0
 
+    # 局部二维位姿。填入真实原点后再启用；x 向东、y 向北，单位为米。
+    local_pose_enabled: false
+    origin_latitude_deg: 0.0
+    origin_longitude_deg: 0.0
+    local_frame_id: map
+    # GGA 与 HPR 的 UTC 时间差不超过此值时，组合位姿才有效。
+    local_pose_sync_tolerance_sec: 0.2
+
     # 是否启用 NTRIP 差分；启用时按 profile 自动叠加对应配置文件。
     ntrip_enabled: true
     # ml：中国大陆；hk：中国香港。默认使用中国大陆配置。

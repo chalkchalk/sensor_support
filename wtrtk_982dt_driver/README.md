@@ -1,7 +1,7 @@
 # WTRTK-982DT 定位、双天线定向与 NTRIP（ROS 2 Jazzy）
 
 这是一个可独立放入 ROS 2 工作空间 `src` 目录的单一功能包，适用于 Ubuntu 24.04 +
-ROS 2 Jazzy。包内同时包含 WTRTK-982DT 自定义定向消息、Python 节点、launch、配置
+ROS 2 Jazzy。包内同时包含 WTRTK-982DT 自定义消息、Python 节点、launch、配置
 与测试，不再依赖另一个接口包。
 
 ## 实现的功能
@@ -11,6 +11,7 @@ ROS 2 Jazzy。包内同时包含 WTRTK-982DT 自定义定向消息、Python 节�
 - 将 `$GPGGA` / `$GNGGA` 转成标准 `sensor_msgs/msg/NavSatFix`；
 - 兼容 `$GPHPR`、`$GNHPR` 等 HPR talker 前缀，发布航向、俯仰、横滚、解状态等；
 - 输出接收机原始真北航向、安装偏角修正后的车辆航向和 ROS ENU yaw；
+- 将有效经纬度转换为以 YAML 配置点为原点的局部二维坐标，并与航向组合发布；
 - 取得 GGA 后可选连接 NTRIP caster；
 - 使用 Basic Auth 请求挂载点，周期性上传最新 GGA；
 - 接收 RTCM 二进制流并原样写回 GNSS 串口；
@@ -64,6 +65,8 @@ ntrip_profile: ml
 ros2 launch wtrtk_982dt_driver gps_ntrip.launch.py \
   config_file:=/absolute/path/to/gps_ntrip_ml.yaml
 ```
+ros2 launch wtrtk_982dt_driver gps_ntrip.launch.py \
+  config_file:=/home/moan/dev/rtk_ws/src/sensor_support/wtrtk_982dt_driver/config/gps_ntrip_ml.yaml
 
 中国香港使用指令（对应 gps_ntrip_hk.yaml）：
 
@@ -74,12 +77,13 @@ ros2 launch wtrtk_982dt_driver gps_ntrip.launch.py \
 
 ## 话题设计
 
-节点只保留四个职责明确的话题：
+节点提供以下业务与状态话题：
 
 | 话题 | 类型 | 作用 |
 |---|---|---|
 | `/gnss/fix` | `sensor_msgs/msg/NavSatFix` | 经纬度、高程及定位是否有效 |
 | `/gnss/attitude` | `wtrtk_982dt_driver/msg/GnssAttitude` | GPHPR 定向结果及质量信息 |
+| `/gnss/local_pose` | `wtrtk_982dt_driver/msg/GnssLocalPose` | 局部 x、y 坐标及配对后的车辆航向 |
 | `/gnss/nmea` | `std_msgs/msg/String` | 接收机全部原始 `$...` 语句，供诊断/记录 |
 | `/gnss/device_connected` | `std_msgs/msg/Bool` | 串口设备当前是否在线 |
 | `/gnss/fix_valid` | `std_msgs/msg/Bool` | 当前定位解是否有效 |
@@ -93,8 +97,10 @@ ros2 launch wtrtk_982dt_driver gps_ntrip.launch.py \
 
 ```bash
 ros2 interface show wtrtk_982dt_driver/msg/GnssAttitude
+ros2 interface show wtrtk_982dt_driver/msg/GnssLocalPose
 ros2 topic echo /gnss/fix
 ros2 topic echo /gnss/attitude
+ros2 topic echo /gnss/local_pose
 ros2 topic echo /gnss/device_connected
 ros2 topic echo /gnss/fix_valid
 ros2 topic echo /ntrip/connected
@@ -126,6 +132,10 @@ ros2 topic hz /gnss/attitude
 - `receiver_request_retry_sec`：没有收到对应报文时，重新发送输出命令的间隔；
 - `attitude_timeout_sec`：HPR 超时判定，建议大于 HPR 输出周期的 2 倍；
 - `heading_offset_deg`：天线基线航向到车辆前向的固定安装偏角；
+- `local_pose_enabled`：是否发布局部二维位姿；
+- `origin_latitude_deg`、`origin_longitude_deg`：局部坐标系的 WGS-84 原点；
+- `local_frame_id`：局部坐标系名称，默认 `map`；
+- `local_pose_sync_tolerance_sec`：GGA 与 HPR 组成有效位姿时允许的最大 UTC 时间差；
 - `validate_nmea_checksum`：是否拒绝校验和错误/缺失的 GGA/HPR；
 - `ntrip_host`、`ntrip_port`、`ntrip_mountpoint`：caster 地址；
 - `ntrip_version`：支持 `1.0`（兼容旧 caster）和 `2.0`；
@@ -133,6 +143,26 @@ ros2 topic hz /gnss/attitude
 
 参数 `ntrip_username` / `ntrip_password` 也可在私有 YAML 中设置，其优先级高于环境
 变量，但不要把含真实凭据的文件提交到版本库。题目中提供的旧凭据未复制进新代码。
+
+## 局部二维位姿
+
+在实际使用的区域配置 `gps_ntrip_ml.yaml` 或 `gps_ntrip_hk.yaml` 中分别填入场地原点
+并启用（关闭 NTRIP、只使用默认配置时则填写 `gps_ntrip.yaml`）：
+
+```yaml
+local_pose_enabled: true
+origin_latitude_deg: 31.12345678
+origin_longitude_deg: 121.12345678
+local_frame_id: map
+local_pose_sync_tolerance_sec: 0.2
+```
+
+节点使用 WGS-84 ECEF 到原点局部 ENU 切平面的转换，其中 `x` 向东、`y` 向北，
+单位为米；当前位置和原点都按零高程参与二维转换，避免 GNSS 高程波动影响水平坐标。
+`heading_deg` 为应用 `heading_offset_deg` 后的车辆航向，真北为 0°、顺时针增加。
+只有定位、航向和两者的 UTC 时间配对均有效时，`data_valid` 才为 `true`；不可用字段
+使用 `NaN`，设备断开或姿态超时时会发布一帧无效状态。局部坐标表示主天线位置，不包含
+主天线到车体中心的杆臂补偿。
 
 ## 频率与首次测试建议
 

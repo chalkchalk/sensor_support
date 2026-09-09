@@ -8,6 +8,7 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GnssAttitude.msg"
+  "msg/GnssLocalPose.msg"
   DEPENDENCIES std_msgs
 )
 
@@ -37,6 +38,9 @@ if(BUILD_TESTING)
     APPEND_ENV ${_pytest_environment}
   )
   ament_add_pytest_test(test_ntrip test/test_ntrip.py
+    APPEND_ENV ${_pytest_environment}
+  )
+  ament_add_pytest_test(test_local_coordinates test/test_local_coordinates.py
     APPEND_ENV ${_pytest_environment}
   )
 endif()

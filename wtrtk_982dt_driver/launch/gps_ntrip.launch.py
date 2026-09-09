@@ -22,9 +22,15 @@ def _launch_node(context, package_share):
     if ntrip_enabled:
         if profile not in ('ml', 'hk'):
             raise RuntimeError(f'Unsupported ntrip_profile: {profile!r}; expected ml or hk')
-        parameter_files.append(
-            os.path.join(package_share, 'config', f'gps_ntrip_{profile}.yaml')
+        profile_file = os.path.join(
+            package_share,
+            'config',
+            f'gps_ntrip_{profile}.yaml',
         )
+        # The regional files can be launched directly as complete primary
+        # configurations. Avoid loading the same file twice in that case.
+        if os.path.realpath(config_file) != os.path.realpath(profile_file):
+            parameter_files.append(profile_file)
 
     return [Node(
         package='wtrtk_982dt_driver',

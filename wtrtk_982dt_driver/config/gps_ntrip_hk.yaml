@@ -16,6 +16,15 @@ gps_ntrip_node:
     # 天线基线航向到车辆前向的安装偏角：车辆航向 = 原始航向 + 此值。
     heading_offset_deg: 0.0
 
+    # 香港场地的局部二维位姿原点。填入真实值后再启用。
+    local_pose_enabled: false
+    origin_latitude_deg: 0.0
+    origin_longitude_deg: 0.0
+    local_frame_id: map
+    local_pose_sync_tolerance_sec: 0.2
+
+    ntrip_enabled: true
+    ntrip_profile: hk
     ntrip_host: www.geodetic.gov.hk
     ntrip_port: 2101
     ntrip_mountpoint: VRS32G
