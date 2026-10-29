@@ -1,0 +1,3 @@
+[submodule "handheld_serial_bridge"]
+	path = handheld_serial_bridge
+	url = git@github.com:USTC-AIR-Lab/handheld_serial_bridge.git
