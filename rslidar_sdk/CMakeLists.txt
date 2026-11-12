@@ -136,9 +136,11 @@ if(rclcpp_FOUND)
 
   add_definitions(-DROS2_FOUND)
   include_directories(${rclcpp_INCLUDE_DIRS})
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 
   find_package(ament_cmake REQUIRED)
+  find_package(robot_common REQUIRED)
+  find_package(diagnostic_updater REQUIRED)
   find_package(sensor_msgs REQUIRED)
   find_package(rslidar_msg REQUIRED)
   find_package(std_msgs REQUIRED)                      
@@ -189,6 +191,7 @@ endif(roscpp_FOUND)
 if(rclcpp_FOUND)
 
   ament_target_dependencies(rslidar_sdk_node 
+    robot_common diagnostic_updater
     rclcpp 
     std_msgs 
     sensor_msgs 

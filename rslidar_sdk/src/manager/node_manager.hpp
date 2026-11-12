@@ -44,7 +44,11 @@ class NodeManager
 {
 public:
 
+#ifdef ROS2_FOUND
+  void init(const YAML::Node& config,const std::shared_ptr<rclcpp::Node>& node);
+#else
   void init(const YAML::Node& config);
+#endif
   void start();
   void stop();
 
@@ -53,6 +57,10 @@ public:
 
 private:
 
+#ifdef ROS2_FOUND
+  std::unique_ptr<robot_common::BusinessHealth> health_;
+  std::vector<std::shared_ptr<LidarBusinessCounters>> counters_;
+#endif
   std::vector<Source::Ptr> sources_;
 };
 

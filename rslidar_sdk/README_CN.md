@@ -171,3 +171,8 @@ rslidar_sdk的功能通过配置参数文件来实现，请仔细阅读。
 [录制ROS数据包然后播放它](doc/howto/11_how_to_record_replay_packet_rosbag_CN.md)
 
 [ROS2_humble帧率降低解决方法](doc/howto/13_how_to_solve_ROS2_humble_frame_rate_drop_CN.md)
+
+
+## 本仓ROS2业务诊断适配（2026-11-11）
+
+保留上游协议/解码与许可证；本地ROS2增加robot_common和diagnostic_updater依赖。仅显式设置diagnostics.service_name时在原参数节点发布1Hz标准诊断，默认不启用；M20入口设为m20_lidar。使用既有SDK错误、解码完成及出云计数/耗时，不注册额外原始数据包回调、不复制点云、不新增监控节点。参数及行为见[NUC诊断说明](../../tiger_robot_bringup/docs/nuc-business-health.md)。仅ONLINE/PCAP SourceDriver路径登记业务统计；未宣称ROS_PACKET模式已适配验收。NUC已构建并验证无数据黄色，实际雷达出云/恢复尚待设备就绪。

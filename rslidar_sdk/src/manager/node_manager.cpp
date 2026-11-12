@@ -40,7 +40,11 @@ namespace robosense
 namespace lidar
 {
 
+#ifdef ROS2_FOUND
+void NodeManager::init(const YAML::Node& config,const std::shared_ptr<rclcpp::Node>& node)
+#else
 void NodeManager::init(const YAML::Node& config)
+#endif
 {
   YAML::Node common_config = yamlSubNodeAbort(config, "common");
 
@@ -61,6 +65,33 @@ void NodeManager::init(const YAML::Node& config)
 
   YAML::Node lidar_config = yamlSubNodeAbort(config, "lidar");
 
+#ifdef ROS2_FOUND
+  const auto service=node->declare_parameter<std::string>("diagnostics.service_name", "");
+  if(!service.empty()) {
+    const auto timeout=node->declare_parameter<double>("diagnostics.input_timeout",1.0);
+    if(!std::isfinite(timeout)||timeout<=0)throw std::invalid_argument("invalid lidar diagnostic timeout");
+    health_=std::make_unique<robot_common::BusinessHealth>(node,service,"lidar_driver",[this,node,timeout](auto &s){
+      bool valid=!counters_.empty();bool error=false;
+      for(size_t i=0;i<counters_.size();++i) {
+        const auto &c=*counters_[i];const auto code=c.error_code.load();
+        const auto stamp=c.source_ns.load();const double age=double(node->now().nanoseconds()-stamp)/1e9;
+        valid=valid && c.decoded->age()<=timeout && c.output->age()<=timeout && stamp>0 && age>=-.05 && age<=timeout;
+        error=error || code>=0x80;
+        s.add("lidar_"+std::to_string(i)+".sdk_code",code);
+        s.add("lidar_"+std::to_string(i)+".sdk_events",c.exceptions.load());
+        s.add("lidar_"+std::to_string(i)+".source_age_s",age);
+      }
+      s.summary(error?2:valid?0:1,error?"雷达驱动内部异常":valid?"前后雷达出云正常":"等待雷达数据、解码或新鲜点云");
+    });
+    const auto expected=node->declare_parameter<double>("diagnostics.expected_hz",10.0);
+    for(size_t i=0;i<lidar_config.size();++i) {
+      auto c=std::make_shared<LidarBusinessCounters>();
+      c->decoded=health_->metric("lidar_"+std::to_string(i)+"_decode",expected);
+      c->output=health_->metric("lidar_"+std::to_string(i)+"_output",expected);
+      counters_.push_back(c);
+    }
+  }
+#endif
   for (uint8_t i = 0; i < lidar_config.size(); ++i)
   {
     std::shared_ptr<Source> source;
@@ -76,6 +107,9 @@ void NodeManager::init(const YAML::Node& config)
         RS_INFO << "------------------------------------------------------" << RS_REND;
 
         source = std::make_shared<SourceDriver>(SourceType::MSG_FROM_LIDAR);
+#ifdef ROS2_FOUND
+        if(health_)source->diagnostics=counters_[i];
+#endif
         source->init(lidar_config[i]);
         break;
 
@@ -99,6 +133,9 @@ void NodeManager::init(const YAML::Node& config)
         RS_INFO << "------------------------------------------------------" << RS_REND;
 
         source = std::make_shared<SourceDriver>(SourceType::MSG_FROM_PCAP);
+#ifdef ROS2_FOUND
+        if(health_)source->diagnostics=counters_[i];
+#endif
         source->init(lidar_config[i]);
         break;
 

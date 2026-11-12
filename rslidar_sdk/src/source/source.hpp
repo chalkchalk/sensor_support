@@ -35,6 +35,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "msg/rs_msg/lidar_point_cloud_msg.hpp"
 #include "utility/yaml_reader.hpp"
 #include <rs_driver/msg/packet.hpp>
+#ifdef ROS2_FOUND
+#include <robot_common/business_health.hpp>
+struct LidarBusinessCounters {
+  robot_common::BusinessMetric *decoded{nullptr},*output{nullptr};
+  std::atomic<int> error_code{0};
+  std::atomic<uint64_t> exceptions{0};
+  std::atomic<int64_t> source_ns{0};
+};
+#endif
 
 
 namespace robosense
@@ -80,6 +89,9 @@ class Source
 {
 public:
   typedef std::shared_ptr<Source> Ptr;
+#ifdef ROS2_FOUND
+  std::shared_ptr<LidarBusinessCounters> diagnostics;
+#endif
 
   virtual void init(const YAML::Node& config) {}
   virtual void start() {}
@@ -126,10 +138,17 @@ inline void Source::sendPacket(const Packet& msg)
 
 inline void Source::sendPointCloud(std::shared_ptr<LidarPointCloudMsg> msg)
 {
+#ifdef ROS2_FOUND
+  const auto diagnostic_begin=robot_common::BusinessMetric::steadyNs();
+#endif
   for (auto iter : pc_cb_vec_)
   {
     iter->sendPointCloud(*msg);
   }
+#ifdef ROS2_FOUND
+  if(diagnostics && !pc_cb_vec_.empty() && !msg->points.empty())
+    diagnostics->output->record(static_cast<int64_t>(msg->timestamp*1e9),double(robot_common::BusinessMetric::steadyNs()-diagnostic_begin)/1e6);
+#endif
 }
 
 #ifdef ENABLE_IMU_DATA_PARSE

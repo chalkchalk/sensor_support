@@ -225,6 +225,14 @@ inline void SourceDriver::putPacket(const Packet& msg)
 
 void SourceDriver::putPointCloud(std::shared_ptr<LidarPointCloudMsg> msg)
 {
+#ifdef ROS2_FOUND
+  if(diagnostics && !msg->points.empty()) {
+    const auto stamp=static_cast<int64_t>(msg->timestamp*1e9);
+    diagnostics->decoded->record(stamp);
+    diagnostics->source_ns.store(stamp);
+    diagnostics->error_code.store(0);
+  }
+#endif
   point_cloud_queue_.push(msg);
 }
 #ifdef ENABLE_IMU_DATA_PARSE
@@ -274,6 +282,9 @@ void SourceDriver::processPointCloud()
 
 inline void SourceDriver::putException(const lidar::Error& msg)
 {
+#ifdef ROS2_FOUND
+  if(diagnostics) {diagnostics->error_code.store(static_cast<int>(msg.error_code));++diagnostics->exceptions;}
+#endif
   switch (msg.error_code_type)
   {
     case lidar::ErrCodeType::INFO_CODE:

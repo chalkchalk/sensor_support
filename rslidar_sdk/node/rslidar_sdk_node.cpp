@@ -56,6 +56,7 @@ static void sigHandler(int sig)
 #ifdef ROS_FOUND
   ros::shutdown();
 #elif ROS2_FOUND
+  rclcpp::shutdown();
   g_cv.notify_all();
 #endif
 }
@@ -120,7 +121,11 @@ int main(int argc, char** argv)
   }
 
   std::shared_ptr<NodeManager> demo_ptr = std::make_shared<NodeManager>();
+#ifdef ROS2_FOUND
+  demo_ptr->init(config,nd);
+#else
   demo_ptr->init(config);
+#endif
   demo_ptr->start();
 
   RS_MSG << "RoboSense-LiDAR-Driver is running....." << RS_REND;
@@ -128,8 +133,9 @@ int main(int argc, char** argv)
 #ifdef ROS_FOUND
   ros::spin();
 #elif ROS2_FOUND
-  std::unique_lock<std::mutex> lck(g_mtx);
-  g_cv.wait(lck);
+  // Serve diagnostics/parameters on the existing parameter node. The cloud
+  // workers remain unchanged; no separate monitor node or topic subscription.
+  rclcpp::spin(nd);
 #endif
 
   return 0;
